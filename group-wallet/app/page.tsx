@@ -1,9 +1,10 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { useForm } from "react-hook-form"
+import { set, useForm } from "react-hook-form"
 import { z } from "zod";
 import React from "react";
+import { useEffect } from "react";
 
 import { Button } from "@/components/ui/button"
 import {
@@ -50,27 +51,70 @@ const formSchema = z.object({
 
 });
 
+interface Expense {
+  username: string;
+  description: string;
+  amount: string;
+  paid_by: string;
+  split_type: string;
+}
 
 export default function Home() {
 
-  const [isFormVisible, setIsFormVisible] = useState(false);
-  const expenses = JSON.parse(localStorage?.getItem("expenses") || "[]") || [];
-  expenses.reverse();
+  const [isFormVisible, setIsFormVisible] = useState<boolean>(false);
+  const [isShowExpenses, setIsShowExpenses] = useState<boolean>(false);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [totalOwed, setTotalOwed] = useState<number>(0);
+  const [totalLent, setTotalLent] = useState<number>(0);
+  const [expensePerUser, setExpensePerUser] = useState<any>({});
 
-  //count the total amount you owe and lent
-  const expensePerUser = JSON.parse(localStorage.getItem("expensePerUser") || "{}");
-  let totalOwed = 0;
-  for(const item in Object.keys(expensePerUser)) {
-    
-    const user = Object.keys(expensePerUser)[item];
-    if(user !== "you") {
-      totalOwed += expensePerUser[user].owes || 0;
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const storedExpenses:Expense[] = JSON.parse(localStorage?.getItem('expenses') || '[]');
+      setExpenses(storedExpenses);
+
+      const storedExpensePerUser = JSON.parse(localStorage.getItem('expensePerUser') || '{}');
+      setExpensePerUser(storedExpensePerUser);
+      let totalOwed = 0;
+      for (const user in Object.keys(storedExpensePerUser)) {
+        const username = Object.keys(storedExpensePerUser)[user];
+        if (username !== 'you') {
+          totalOwed += storedExpensePerUser[username].owes || 0;
+        }
+      }
+      setTotalOwed(totalOwed);
+
+      const totalLent = storedExpensePerUser['you']
+        ? Object.values<number>(storedExpensePerUser['you'].owes).reduce((acc, val) => acc + val, 0)
+        : 0;
+      setTotalLent(totalLent);
+    }
+  }, []);
+
+  useEffect(()=>{
+
+    if(expenses.length>0) {
+      localStorage.setItem("expenses", JSON.stringify(expenses));
+    }
+    if(Object.keys(expensePerUser).length>0) {
+      localStorage.setItem("expensePerUser", JSON.stringify(expensePerUser));
     }
 
-  }
-  const totalLent = expensePerUser["you"] ? Object.keys(expensePerUser["you"].owes).reduce((acc, user) => {
-    return acc + expensePerUser["you"].owes[user];
-  }, 0) : 0;
+    let totalOwed = 0;
+    for (const user in Object.keys(expensePerUser)) {
+      const username = Object.keys(expensePerUser)[user];
+      if (username !== 'you') {
+        totalOwed += expensePerUser[username].owes || 0;
+      }
+    }
+    setTotalOwed(totalOwed);
+
+    const totalLent = expensePerUser['you']
+      ? Object.values<number>(expensePerUser['you'].owes).reduce((acc, val) => acc + val, 0)
+      : 0;
+    setTotalLent(totalLent);
+
+  }, [expenses, expensePerUser]);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -87,44 +131,45 @@ export default function Home() {
   function onSubmit(values: z.infer<typeof formSchema>) {
 
     // store in the local storage in a list of expenses
-    expenses.push(values);
+    let newExpenses = [...expenses];
+    newExpenses.push(values);
     const selectedUser = values.username;
     const amount:number = Number(values.amount);
-    console.log("values", values);
-    const expensePerUser = JSON.parse(localStorage.getItem("expensePerUser") || "{}");
     const owedByUser = expensePerUser[selectedUser]?.owes || 0;
     const owedByYou = expensePerUser["you"]?.owes[selectedUser] || 0;
-
+    let newExpensePerUser = {...expensePerUser};
     if(values.split_type === "Equally") {
 
       //get current owed amount for each user
       const splitAmount:number = Number(amount) / 2;
-      
+      const newOwedByUser = owedByUser + (values.paid_by == 'you'?splitAmount : 0);
+      const newOwedByYou = owedByYou + (values.paid_by == 'user'?splitAmount: 0);
+
       const expenseForUser = {
         selectedUser: {
-          owes: splitAmount + owedByUser,
+          owes: newOwedByUser,
         }
       }
       const expenseForYou = expensePerUser["you"] ? {
         "you": {
           owes: {
             ...expensePerUser["you"].owes,
-            [selectedUser]: splitAmount + owedByYou
+            [selectedUser]: newOwedByYou
           }
         }
         } : {
         "you": {
           owes: {
-            [selectedUser]: splitAmount + owedByYou
+            [selectedUser]: newOwedByYou
           }
         }
       }
 
-      expensePerUser[selectedUser] = expenseForUser.selectedUser;
-      expensePerUser["you"] = expenseForYou["you"];
+      newExpensePerUser[selectedUser] = expenseForUser.selectedUser;
+      newExpensePerUser["you"] = expenseForYou["you"];
 
     }
-    else if(values.split_type === "You owe the full amount") {
+    else if(values.split_type === "They owe the full amount" && values.paid_by == 'you') {
 
       const expenseForUser = {
         selectedUser: {
@@ -146,11 +191,11 @@ export default function Home() {
         }
       }
 
-      expensePerUser[selectedUser] = expenseForUser.selectedUser;
-      expensePerUser["you"] = expenseForYou["you"];
+      newExpensePerUser[selectedUser] = expenseForUser.selectedUser;
+      newExpensePerUser["you"] = expenseForYou["you"];
 
     }
-    else if(values.split_type === "They owe the full amount") {
+    else if(values.split_type === "You owe the full amount" && values.paid_by == 'user') {
         
         const expenseForUser = {
           selectedUser: {
@@ -172,26 +217,27 @@ export default function Home() {
         }
       }
   
-        expensePerUser[selectedUser] = expenseForUser.selectedUser;
-        expensePerUser["you"] = expenseForYou["you"];
+        newExpensePerUser[selectedUser] = expenseForUser.selectedUser;
+        newExpensePerUser["you"] = expenseForYou["you"];
     }
     else{
       //throw error
       alert("Invalid split type");
     }
-    localStorage.setItem("expensePerUser", JSON.stringify(expensePerUser));
-    localStorage.setItem("expenses", JSON.stringify(expenses));
+    setExpensePerUser(newExpensePerUser);
+    setExpenses(newExpenses);
+
     //toast message for success
     alert("Expense added successfully");
-
     form.reset();
+    setIsFormVisible(false);
     
   }
 
   return (
     <div className="flex flex-col items-center justify-center h-screen">
 
-      {isFormVisible && (
+      {isFormVisible && !isShowExpenses && (
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="items-center justify-center">
         
@@ -295,11 +341,48 @@ export default function Home() {
         </form>
       </Form>
       )}
+      {
+        isShowExpenses && (
+          <React.Fragment>
+            {/* Show the history from the list of expenses stored in the local storage */}
+            <div className="mt-5 flex flex-col justify-center items-center">
+              <Table>
+                <TableCaption>Expense History Per User</TableCaption>
+                  <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[100px]">User</TableHead>
+                    <TableHead>Owes</TableHead>
+                    <TableHead>Lent</TableHead>
+                    <TableHead>Net</TableHead>
+                  </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {
+                    Object.keys(expensePerUser).map((user:any, index:any) => 
+                    ( user !== 'you' &&
+                      <TableRow key={index}>
+                        <TableCell className="font-medium">{user}</TableCell>
+                        <TableCell>{expensePerUser[user].owes || 0}</TableCell>
+                        <TableCell>{expensePerUser["you"].owes[user] || 0}</TableCell>
+                        <TableCell>{(expensePerUser[user].owes || 0) - (expensePerUser["you"].owes[user] || 0)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+              </Table>
+              <Button className="mt-5 justify-center" onClick={()=> setIsShowExpenses(false)}>Close</Button>
+            </div>
+          </React.Fragment>
+        )
+      }
 
       {
-        !isFormVisible && (
+        !isFormVisible && !isShowExpenses && (
           <React.Fragment> 
-            <Button className="" onClick={() => setIsFormVisible(true)}>Add a new expense</Button>
+            <div className="flex flex-col justify-between md:flex-row">
+              <Button className="mb-5 md:mb-0 md:mr-5" onClick={() => setIsFormVisible(true)}>Add a new expense</Button>
+              <Button className="md:ml-5" onClick={()=> setIsShowExpenses(true)}>Show Expenses</Button>
+            </div>
 
             {/* show total what you owe and lent */}
             <div className="flex flex-row mt-5">
@@ -315,9 +398,9 @@ export default function Home() {
 
             {/* Show the history from the list of expenses stored in the local storage */}
             {/* limit to last 5 records */}
-            <TableCaption>A list of your recent invoices.</TableCaption>
             <div className="mt-5">
               <Table>
+                <TableCaption>Expense History</TableCaption>
                   <TableHeader>
                   <TableRow>
                     <TableHead className="w-[100px]">Paid By</TableHead>
@@ -329,7 +412,7 @@ export default function Home() {
                   <TableBody>
                     {
                     expenses && expenses.length>0 && 
-                    expenses.map((expense:any, index:any) => 
+                    expenses.reverse().map((expense:any, index:any) => 
                     index < 5 &&
                     (
                       <TableRow key={index}>
@@ -343,9 +426,9 @@ export default function Home() {
               </Table>
             </div>
           </React.Fragment>
-          
           )
       }
+
 
     </div>
   )
